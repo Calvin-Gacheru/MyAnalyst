@@ -1,0 +1,29 @@
+FROM python:3.11-slim
+
+# Prevent python from writing pyc files and buffering stdout/stderr
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+# Create non-root user matching UID/GID 1000 for secure execution
+RUN groupadd -g 1000 sandboxgroup && \
+    useradd -u 1000 -g sandboxgroup -m sandboxuser
+
+WORKDIR /workspace
+
+# Install system build dependencies required for Prophet's C++ backend
+# and clean up the apt cache immediately to minimize image bloat
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install core data analysis and advanced time-series forecasting dependencies
+RUN pip install --no-cache-dir \
+    pandas==2.2.2 \
+    numpy==1.26.4 \
+    plotly==5.22.0 \
+    scipy==1.13.0 \
+    statsmodels==0.14.2 \
+    pmdarima==2.0.4 \
+    prophet==1.1.5
+
+USER 1000:1000

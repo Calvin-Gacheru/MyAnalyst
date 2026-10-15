@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MyAnalyst Poster</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #e2e8f0;
+            margin: 0;
+            padding: 2rem;
+            display: flex;
+            justify-content: center;
+        }
+        .poster-container {
+            background-color: #ffffff;
+            width: 100%;
+            max-width: 1400px;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+            border-radius: 12px;
+            overflow: hidden;
+        }
+        .poster-header {
+            background: linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%);
+        }
+        .section-title {
+            color: #1e40af;
+            border-bottom: 3px solid #bfdbfe;
+            padding-bottom: 0.5rem;
+            margin-bottom: 1rem;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="poster-container flex flex-col">
+        <!-- HEADER -->
+        <header class="poster-header text-white p-12 text-center">
+            <h1 class="text-5xl font-bold mb-4 tracking-tight">MyAnalyst: An Autonomous Data Analyst Agent</h1>
+            <h2 class="text-2xl font-light text-blue-100">Proof of Concept: Bridging the Gap Between Messy Data and Prescriptive Business Insights</h2>
+        </header>
+
+        <!-- MAIN GRID -->
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-8 p-10 bg-slate-50">
+            
+            <!-- LEFT COLUMN -->
+            <div class="space-y-8">
+                <section class="bg-white p-6 rounded-lg shadow-sm border border-slate-200">
+                    <h3 class="text-2xl font-bold section-title">1. Background</h3>
+                    <p class="text-slate-700 leading-relaxed mb-4">
+                        <strong>The "Blank Stare" Problem:</strong> Data analysis is traditionally hindered by a steep technical barrier. Non-technical stakeholders struggle to extract answers without writing Python code, while analysts spend hours on repetitive data cleaning tasks (formatting dates, fixing skewed distributions, stripping currency symbols).
+                    </p>
+                    <p class="text-slate-700 leading-relaxed">
+                        There is a critical need for an accessible tool that eliminates the data science learning curve by handling both the deterministic grunt work and the dynamic generation of business insights.
+                    </p>
+                </section>
+
+                <section class="bg-white p-6 rounded-lg shadow-sm border border-slate-200">
+                    <h3 class="text-2xl font-bold section-title">2. What We Have Built (PoC)</h3>
+                    <p class="text-slate-700 leading-relaxed mb-4">
+                        We developed a "junior data scientist that lives on your computer." MyAnalyst is an autonomous, LangGraph-driven data analysis platform served via FastAPI.
+                    </p>
+                    <ul class="list-disc pl-5 space-y-2 text-slate-700">
+                        <li><strong>Automated Data Cleaning:</strong> Instantly turns raw, messy CSVs into analytics-ready data structures.</li>
+                        <li><strong>Proactive Dashboarding:</strong> Generates baseline EDA charts and time-series forecasts before the user even asks a question.</li>
+                        <li><strong>Conversational Interface:</strong> Allows users to ask natural-language questions, triggering the agent to plan, code, and execute custom Python scripts.</li>
+                        <li><strong>Persistent Memory:</strong> Learns business rules (e.g., "ignore refunded items") and applies them to all future interactions.</li>
+                    </ul>
+                </section>
+            </div>
+
+            <!-- CENTER COLUMN (Methodology) -->
+            <div class="md:col-span-2 space-y-8">
+                <section class="bg-white p-6 rounded-lg shadow-sm border border-slate-200">
+                    <h3 class="text-2xl font-bold section-title">3. Technical Methodology</h3>
+                    
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div>
+                            <h4 class="font-semibold text-blue-900 text-lg mb-2">A. Deterministic Ingestion & Remediation</h4>
+                            <p class="text-slate-600 text-sm mb-2">Before LLM intervention, strict Python heuristics process the data safely and predictably:</p>
+                            <ul class="text-sm text-slate-700 list-disc pl-5 space-y-1">
+                                <li><strong>Regex Parsing:</strong> Strips currency/percentages and coerces datetime columns.</li>
+                                <li><strong>Noise Reduction:</strong> Drops zero-variance columns and flags high-cardinality IDs (UUIDs).</li>
+                                <li><strong>Imputation:</strong> Replaces missing values via Mean (normal), Median (skewed), or Mode (categorical).</li>
+                                <li><strong>Outlier Control:</strong> Caps extreme spikes using Interquartile Range (IQR) bounds.</li>
+                            </ul>
+                        </div>
+                        
+                        <div>
+                            <h4 class="font-semibold text-blue-900 text-lg mb-2">B. Proactive EDA & Autonomous Forecasting</h4>
+                            <p class="text-slate-600 text-sm mb-2">The agent builds an immediate visual baseline:</p>
+                            <ul class="text-sm text-slate-700 list-disc pl-5 space-y-1">
+                                <li><strong>Chart Selection:</strong> Dynamically generates histograms, box plots, and scatter plots based on column data types.</li>
+                                <li><strong>Smart Forecasting:</strong> Evaluates dataset frequency to route to optimal statistical models: <strong>Prophet</strong> for irregular/high-frequency data, and <strong>Auto-ARIMA (SARIMA)</strong> for structured, periodic data via AIC grid search.</li>
+                            </ul>
+                        </div>
+                    </div>
+
+                    <div class="mt-6 bg-slate-100 p-4 rounded-md border border-slate-200">
+                        <h4 class="font-semibold text-blue-900 text-lg mb-2 text-center">C. The Self-Correcting Q&A Loop (LangGraph State Machine)</h4>
+                        <div class="flex flex-col md:flex-row items-center justify-between text-sm font-medium text-slate-700 text-center space-y-2 md:space-y-0">
+                            <div class="bg-white p-2 rounded shadow-sm flex-1 mx-2 border border-blue-200">1. Planner Node<br><span class="text-xs font-normal text-slate-500">Retrieves context & maps logic</span></div>
+                            <div class="text-blue-500 font-bold">→</div>
+                            <div class="bg-white p-2 rounded shadow-sm flex-1 mx-2 border border-blue-200">2. Coder Node<br><span class="text-xs font-normal text-slate-500">Writes Pandas/Plotly Python</span></div>
+                            <div class="text-blue-500 font-bold">→</div>
+                            <div class="bg-white p-2 rounded shadow-sm flex-1 mx-2 border-red-300 border-2">3. Sandbox Executor<br><span class="text-xs font-normal text-slate-500">Runs code in Docker container</span></div>
+                            <div class="text-blue-500 font-bold">→</div>
+                            <div class="bg-white p-2 rounded shadow-sm flex-1 mx-2 border border-blue-200">4. Summarizer Node<br><span class="text-xs font-normal text-slate-500">Translates output to business advice</span></div>
+                        </div>
+                        <p class="text-xs text-center text-red-600 mt-2 font-semibold">* Error Correction Loop: If Step 3 fails, detailed traceback logs route back to Step 2 for autonomous repair (Max 3 retries).</p>
+                    </div>
+                </section>
+
+                <section class="bg-white p-6 rounded-lg shadow-sm border border-slate-200">
+                    <h3 class="text-2xl font-bold section-title">4. Proof of Concept: Test Results & Validation</h3>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div class="border-l-4 border-emerald-500 pl-4">
+                            <h4 class="font-semibold text-slate-800">Secure Execution Architecture</h4>
+                            <p class="text-sm text-slate-600">Successfully migrated from native Python <code>exec()</code> to a network-isolated Docker SDK sandbox. Resolved scope limitations (e.g., list comprehension bugs) and implemented hard memory limits (OOM killed) to handle untrusted code safely.</p>
+                        </div>
+                        <div class="border-l-4 border-emerald-500 pl-4">
+                            <h4 class="font-semibold text-slate-800">Autonomous Error Correction</h4>
+                            <p class="text-sm text-slate-600">The LangGraph router successfully parses Python tracebacks. When syntax or variable name errors occur in generated code, the agent dynamically self-corrects and executes the fixed script without user intervention.</p>
+                        </div>
+                        <div class="border-l-4 border-emerald-500 pl-4">
+                            <h4 class="font-semibold text-slate-800">Dynamic Forecasting Engine</h4>
+                            <p class="text-sm text-slate-600">Validated against synthetic datasets: the pipeline successfully routes irregular/daily data with dropped rows to Prophet, while routing strict monthly financial metrics to Auto-ARIMA.</p>
+                        </div>
+                        <div class="border-l-4 border-emerald-500 pl-4">
+                            <h4 class="font-semibold text-slate-800">Contextual Narrative Generation</h4>
+                            <p class="text-sm text-slate-600">Eliminated LLM "blind spots" by extracting DataFrame insights (means, categoric modes, time-series trends) and injecting them into prompts, allowing the AI to generate highly accurate, plain-English business recommendations.</p>
+                        </div>
+                    </div>
+                </section>
+            </div>
+            
+        </div>
+        
+        <!-- FOOTER -->
+        <footer class="bg-slate-800 text-slate-300 p-6 text-center text-sm">
+            Powered by DeepSeek LLM, LangGraph, FastAPI, Docker, and Pandas. <br>
+            <strong>Status:</strong> Active Proof of Concept | <strong>Next Steps:</strong> Frontend Approval Gates
+        </footer>
+    </div>
+
+</body>
+</html>
