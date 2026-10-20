@@ -1,0 +1,61 @@
+name: myanalyst_app
+description: "MyAnalyst client: upload a CSV, read the analysis, ask questions."
+publish_to: 'none'
+version: 0.1.0
+
+environment:
+  sdk: '>=3.4.4 <4.0.0'
+
+# Versions are pinned exactly (no carets) so a `pub get` on another machine
+# can't silently pull in a different release. Bump deliberately.
+dependencies:
+  biometric_storage: 5.0.1
+  cryptography: 2.7.0
+  dio: 5.7.0
+  file_picker: 8.0.6
+  fl_chart: 0.68.0
+  flutter:
+    sdk: flutter
+  flutter_secure_storage: 9.2.2
+  intl: 0.19.0
+  pdf: 3.11.1
+  printing: 5.13.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true
+
+  assets:
+    - assets/mock/
+
+  # Fonts are bundled rather than fetched at runtime: works offline and
+  # keeps the app from calling third-party font CDNs. Licence: assets/fonts/OFL.txt
+  fonts:
+    - family: Plex Sans
+      fonts:
+        - asset: assets/fonts/IBMPlexSans-Regular.ttf
+          weight: 400
+        - asset: assets/fonts/IBMPlexSans-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/IBMPlexSans-SemiBold.ttf
+          weight: 600
+    - family: Plex Serif
+      fonts:
+        - asset: assets/fonts/IBMPlexSerif-Regular.ttf
+          weight: 400
+        - asset: assets/fonts/IBMPlexSerif-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/IBMPlexSerif-Italic.ttf
+          style: italic
+    - family: Plex Mono
+      fonts:
+        - asset: assets/fonts/IBMPlexMono-Regular.ttf
+    # Chinese fallback (GB2312 subset, regular weight). Also embedded in PDFs.
+    # Licence: assets/fonts/OFL-NotoSansSC.txt
+    - family: Noto Sans SC
+      fonts:
+        - asset: assets/fonts/NotoSansSC-Regular-subset.ttf
