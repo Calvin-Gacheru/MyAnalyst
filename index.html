@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Knowledge Base</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-50 text-gray-800 font-sans p-8">
+    <div class="max-w-3xl mx-auto bg-white rounded-lg shadow-md p-6 border border-gray-200">
+        <h1 class="text-2xl font-bold mb-4 text-blue-700">Technical Support Assistant</h1>
+        
+        <div class="mb-6">
+            <input type="text" id="queryInput" placeholder="Enter error code or describe the issue..." 
+                   class="w-full p-3 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+            <button onclick="askQuestion()" 
+                    class="mt-3 w-full bg-blue-600 text-white font-bold py-3 rounded-md hover:bg-blue-700 transition">
+                Search Knowledge Base
+            </button>
+        </div>
+
+        <div id="loading" class="hidden text-gray-500 mb-4 font-medium animate-pulse">
+            Searching documents and generating solution...
+        </div>
+        
+        <div id="responseContainer" class="hidden border-t pt-4">
+            <h2 class="text-lg font-semibold mb-2 text-gray-900">Solution:</h2>
+            <p id="answerText" class="whitespace-pre-wrap mb-6 text-gray-700 leading-relaxed"></p>
+            
+            <div class="bg-gray-100 p-4 rounded-md">
+                <p class="text-sm font-semibold mb-3">Senior Engineer Verification:</p>
+                <div class="flex gap-3">
+                    <button onclick="submitFeedback(5)" class="px-4 py-2 bg-green-200 text-green-800 font-medium rounded hover:bg-green-300">
+                        Approve (Accurate)
+                    </button>
+                    <button onclick="submitFeedback(1)" class="px-4 py-2 bg-red-200 text-red-800 font-medium rounded hover:bg-red-300">
+                        Reject (Inaccurate)
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentQueryId = null;
+
+        async function askQuestion() {
+            const question = document.getElementById('queryInput').value;
+            if (!question) return;
+
+            document.getElementById('loading').classList.remove('hidden');
+            document.getElementById('responseContainer').classList.add('hidden');
+
+            try {
+                const response = await fetch('http://127.0.0.1:8000/ask', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ user_id: 1, question: question })
+                });
+                
+                const data = await response.json();
+                
+                document.getElementById('loading').classList.add('hidden');
+                document.getElementById('responseContainer').classList.remove('hidden');
+                
+                if (data.error) {
+                    document.getElementById('answerText').innerText = "Error: " + data.error;
+                } else {
+                    currentQueryId = data.query_id; // Store the ID for feedback
+                    document.getElementById('answerText').innerText = data.answer || JSON.stringify(data);
+                }
+            } catch (error) {
+                document.getElementById('loading').classList.add('hidden');
+                alert("Connection failed. Did you configure CORS in FastAPI?");
+            }
+        }
+
+        async function submitFeedback(rating) {
+            if (!currentQueryId) {
+                alert("No query to rate!");
+                return;
+            }
+
+            try {
+                const response = await fetch('http://127.0.0.1:8000/feedback', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        query_id: currentQueryId, 
+                        rating: rating,
+                        engineers_comment: rating === 5 ? "Approved by engineer" : "Rejected - inaccurate answer"
+                    })
+                });
+                
+                const result = await response.json();
+                if (result.error) {
+                    alert("Error saving feedback: " + result.error);
+                } else {
+                    // Quick visual feedback for the user
+                    alert(rating === 5 ? "✅ Answer approved!" : "❌ Answer rejected.");
+                }
+            } catch (error) {
+                alert("Failed to submit feedback.");
+            }
+        }
+    </script>
+</body>
+</html>

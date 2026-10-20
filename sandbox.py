@@ -4,7 +4,7 @@ Execution sandbox.
 
 Provides secure, isolated execution of LLM-generated Python code inside a
 dedicated Docker container with:
-- Read-only bind mount for the dataset file
+- Read-only bind mounts for every tabular file in the workspace
 - Full network isolation (network_mode="none")
 - Hard memory and CPU limits
 - Non-root user execution
@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shutil
 import tempfile
 from dataclasses import dataclass, field
@@ -54,12 +55,18 @@ import traceback
 output_file = "/workspace/output.json"
 script_file = "/workspace/script.py"
 
+# {original filename: container path} for every dataset mounted under /data
+with open("/workspace/files.json", "r", encoding="utf-8") as f:
+    files = json.load(f)
+
 # Pre-populate common analytics modules so scripts function even if
 # the LLM omits import statements.
 execution_namespace = {
     "__name__": "__main__",
     "__file__": script_file,
-    "file_path": "/data/dataset.csv",
+    "files": files,
+    # Convenience alias for single-dataset scripts: the first mounted file.
+    "file_path": next(iter(files.values()), None),
 }
 
 for mod_name, alias in [("pandas", "pd"), ("plotly.express", "px"), ("plotly.graph_objects", "go"), ("numpy", "np")]:
@@ -92,6 +99,10 @@ try:
             plotly_json = fig_val.to_json()
         except Exception:
             pass
+
+    # Drop a `result` that is just the figure serialized again.
+    if plotly_json is not None and isinstance(result_val, str) and result_val == plotly_json:
+        result_val = None
 
     if result_val is None and plotly_json is None:
         raise ValueError("Script did not assign a `result` or `fig` variable.")
@@ -141,16 +152,37 @@ def _get_docker_client() -> docker.DockerClient:
         ) from exc
 
 
+def container_path_for(filename: str) -> str:
+    """Where a dataset is mounted inside the sandbox. Kept deterministic so the
+    Coder prompt and the mounts always agree."""
+    stem = re.sub(r"[^A-Za-z0-9_.-]", "_", Path(filename).stem)
+    return f"/data/{stem}.csv"
+
+
 def execute_code_in_docker(
-    script: str, file_path: str, timeout_seconds: int = 30
+    script: str, files: dict[str, str], timeout_seconds: int = 30
 ) -> ExecutionResult:
-    """Executes generated python code inside a network-isolated Docker container."""
-    host_csv_path = Path(file_path).resolve()
-    if not host_csv_path.exists():
-        return ExecutionResult(
-            success=False,
-            error=f"Dataset file does not exist at path: {file_path}",
-        )
+    """Executes generated python code inside a network-isolated Docker container.
+
+    `files` maps each dataset's original filename to its cleaned CSV on the host.
+    """
+    if not files:
+        return ExecutionResult(success=False, error="No tabular datasets were provided to the sandbox.")
+
+    mounts: dict[str, str] = {}  # host path -> container path
+    container_files: dict[str, str] = {}  # original filename -> container path
+    for filename, host_path in files.items():
+        host_csv_path = Path(host_path).resolve()
+        if not host_csv_path.exists():
+            return ExecutionResult(
+                success=False,
+                error=f"Dataset file does not exist at path: {host_path}",
+            )
+        target = container_path_for(filename)
+        if target in mounts.values():
+            return ExecutionResult(success=False, error=f"Two datasets map to the same sandbox path: {target}")
+        mounts[str(host_csv_path)] = target
+        container_files[filename] = target
 
     try:
         client = _get_docker_client()
@@ -176,14 +208,13 @@ def execute_code_in_docker(
 
         script_path.write_text(script, encoding="utf-8")
         runner_path.write_text(_RUNNER_SCRIPT, encoding="utf-8")
+        (Path(temp_dir) / "files.json").write_text(json.dumps(container_files), encoding="utf-8")
 
         # Mount specifications:
-        # - host CSV file is mounted read-only at /data/dataset.csv
+        # - each host CSV file is mounted read-only under /data
         # - host temp directory is mounted read-write at /workspace
-        volumes = {
-            str(host_csv_path): {"bind": "/data/dataset.csv", "mode": "ro,z"},
-            str(Path(temp_dir).resolve()): {"bind": "/workspace", "mode": "rw,z"},
-        }
+        volumes = {host: {"bind": target, "mode": "ro,z"} for host, target in mounts.items()}
+        volumes[str(Path(temp_dir).resolve())] = {"bind": "/workspace", "mode": "rw,z"}
 
         mem_limit = getattr(settings, "SANDBOX_MEM_LIMIT", "512m")
         nano_cpus = getattr(settings, "SANDBOX_NANO_CPUS", 1_000_000_000)  # 1.0 CPU

@@ -8,6 +8,7 @@ All environment-driven settings live here so other modules never read
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -22,7 +23,14 @@ class Settings:
     # --- Storage ---
     DATA_DIR: Path = Path(os.environ.get("MYANALYST_DATA_DIR", "./data"))
     UPLOAD_DIR: Path = DATA_DIR / "uploads"
-    SQLITE_PATH: Path = DATA_DIR / "myanalyst.db"
+    # SQLAlchemy maps a bare "postgresql://" to psycopg2, which isn't installed;
+    # force the psycopg (v3) driver so a plain URL in .env still works.
+    DATABASE_URL: str = re.sub(
+        r"^postgres(ql)?://",
+        "postgresql+psycopg://",
+        os.environ.get("DATABASE_URL", "postgresql+psycopg://postgres:postgres@localhost:5432/myanalyst"),
+    )
+
 
     # --- LLM ---
     # NOTE: point this at whichever current DeepSeek model string your

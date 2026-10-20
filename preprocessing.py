@@ -100,18 +100,36 @@ def _drop_zero_variance_columns(df: pd.DataFrame, log: list[dict[str, str]]) -> 
     return dropped
 
 
+# "id", "customer_id", "order id", "uuid", "guid" in any case, plus CamelCase "CustomerID" /
+# "OrderId". The CamelCase branch is case-sensitive so words like "Paid" don't match.
+_ID_NAME_PATTERN = re.compile(r"(?i:^id$|[_\s-]id$|^uuid$|guid)|(?<=[a-z])I[dD]$")
+
+
+def _is_sequential_integer(series: pd.Series) -> bool:
+    """True for a row counter: every value unique and together they fill a consecutive range."""
+    non_null = series.dropna()
+    if non_null.empty or not non_null.is_unique:
+        return False
+    return int(non_null.max()) - int(non_null.min()) + 1 == len(non_null)
+
+
 def _flag_high_cardinality_ids(df: pd.DataFrame, log: list[dict[str, str]]) -> set[str]:
     n_rows = max(len(df), 1)
     flagged: set[str] = set()
-    id_name_pattern = re.compile(r"(^id$|_id$|^uuid$|guid)", re.IGNORECASE)
     for col in df.columns:
-        if not (pd.api.types.is_object_dtype(df[col]) or pd.api.types.is_string_dtype(df[col])):
+        is_text = pd.api.types.is_object_dtype(df[col]) or pd.api.types.is_string_dtype(df[col])
+        is_integer = pd.api.types.is_integer_dtype(df[col]) and not pd.api.types.is_bool_dtype(df[col])
+        if not (is_text or is_integer):
             continue
         uniqueness_ratio = df[col].nunique(dropna=True) / n_rows
-        looks_like_id_name = bool(id_name_pattern.search(col))
-        if uniqueness_ratio >= settings.HIGH_CARDINALITY_RATIO or (
-            looks_like_id_name and uniqueness_ratio >= 0.5
-        ):
+        looks_like_id_name = bool(_ID_NAME_PATTERN.search(str(col)))
+        # Highly unique integers are often genuine measures (e.g. revenue in cents), so a
+        # numeric column needs an ID-like name or to be a plain row counter.
+        if is_text:
+            is_id = uniqueness_ratio >= settings.HIGH_CARDINALITY_RATIO
+        else:
+            is_id = _is_sequential_integer(df[col])
+        if is_id or (looks_like_id_name and uniqueness_ratio >= 0.5):
             flagged.add(col)
             log.append(
                 {
