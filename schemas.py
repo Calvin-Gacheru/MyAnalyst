@@ -65,6 +65,20 @@ class WorkspaceResponse(BaseModel):
     executive_summary: str = ""
     # Per-file ingestion failures from this request; other files in the batch still succeed.
     errors: list[str] = Field(default_factory=list)
+    # Deterministic cash-flow snapshot, gap projection and financing fit for
+    # the workspace's best transaction file (cashflow.py); None if no file has
+    # dates + amounts.
+    cashflow: dict[str, Any] | None = None
+    cashflow_file: str | None = None
+    # What was hidden from the LLM across all files (privacy.py).
+    privacy: dict[str, Any] = Field(default_factory=dict)
+
+# One row of GET /workspaces (the signed-in user's workspaces).
+class WorkspaceSummary(BaseModel):
+    workspace_id: str
+    name: str
+    created_at: datetime
+    files: list[str] = Field(default_factory=list)
 
 ### --------------------------------------------------------------------------
 ### Business rules

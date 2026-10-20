@@ -152,10 +152,9 @@ def _downcast_and_categorize(
         if col in excluded:
             continue
         dtype = df[col].dtype
-        if pd.api.types.is_float_dtype(dtype) and dtype == np.float64:
-            df[col] = pd.to_numeric(df[col], downcast="float")
-            log.append({"column": col, "action": "downcast_float64", "detail": "Downcast float64 to a smaller float subtype."})
-        elif pd.api.types.is_integer_dtype(dtype) and dtype == np.int64:
+        # float64 is deliberately NOT downcast: float32 keeps ~7 significant
+        # digits, which corrupts money (12,345,678.91 -> 12,345,679).
+        if pd.api.types.is_integer_dtype(dtype) and dtype == np.int64:
             df[col] = pd.to_numeric(df[col], downcast="integer")
             log.append({"column": col, "action": "downcast_int64", "detail": "Downcast int64 to a smaller integer subtype."})
         elif pd.api.types.is_object_dtype(dtype) or pd.api.types.is_string_dtype(dtype):
@@ -278,15 +277,21 @@ def remediate_data(
                     }
                 )
 
+            # Outliers are reported, never rewritten. In financial data an
+            # "outlier" is usually a real transaction (a large order, a cheap
+            # item); capping it silently changes every total computed later.
+            # On store_sales.csv capping halved total revenue.
             capped, lower, upper = _cap_outliers_iqr(df[col].astype(float))
-            n_capped = int((df[col].astype(float) != capped).sum())
-            if n_capped > 0:
-                df[col] = capped
+            n_outliers = int((df[col].astype(float) != capped).sum())
+            if n_outliers > 0:
                 log.append(
                     {
                         "column": col,
-                        "action": "cap_outliers_iqr",
-                        "detail": f"Capped {n_capped} outlier value(s) to IQR bounds [{lower:.4g}, {upper:.4g}].",
+                        "action": "flag_outliers_iqr",
+                        "detail": (
+                            f"{n_outliers} value(s) fall outside the typical range "
+                            f"[{lower:.4g}, {upper:.4g}]; kept unchanged, worth a check."
+                        ),
                     }
                 )
 

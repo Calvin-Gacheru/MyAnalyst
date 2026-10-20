@@ -39,6 +39,13 @@ class Settings:
     LLM_MODEL: str = os.environ.get("MYANALYST_LLM_MODEL", "deepseek-flash")
     LLM_MAX_TOKENS: int = int(os.environ.get("MYANALYST_LLM_MAX_TOKENS", "2048"))
 
+    # --- Auth (see auth.py) ---
+    # HS256 signing key for access-token JWTs. Required unless auth is
+    # disabled; generate with: python -c "import secrets; print(secrets.token_urlsafe(48))"
+    JWT_SECRET: str = os.environ.get("MYANALYST_JWT_SECRET", "")
+    ACCESS_TOKEN_MINUTES: int = int(os.environ.get("MYANALYST_ACCESS_TOKEN_MINUTES", "15"))
+    REFRESH_TOKEN_DAYS: int = int(os.environ.get("MYANALYST_REFRESH_TOKEN_DAYS", "30"))
+
     # --- Agent loop guards ---
     MAX_CODER_RETRIES: int = int(os.environ.get("MYANALYST_MAX_CODER_RETRIES", "3"))
 

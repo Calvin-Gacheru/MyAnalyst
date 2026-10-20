@@ -247,6 +247,7 @@
     impute_missing_numeric: "imputed",
     impute_missing_categorical: "imputed",
     cap_outliers_iqr: "outliers",
+    flag_outliers_iqr: "outliers flagged",
   };
 
   // `data` is the full workspace state (every file, not just the latest upload).

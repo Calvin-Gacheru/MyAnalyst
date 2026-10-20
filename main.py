@@ -8,23 +8,29 @@ from __future__ import annotations
 import io
 import json
 import logging
+import os
 import re
+import shutil
 import uuid
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
-from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi import Depends, FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+import auth
 import graph
 import memory
 import schemas
 import llm
 import rag
 import modeling
+from auth import User, current_user
+from cashflow import analyse_cashflow, insights_for_summary
+from privacy import PrivacyFilter
 from config import settings
 from preprocessing import apply_ingestion_heuristics, extract_metadata, remediate_data
 from sandbox import container_path_for
@@ -38,18 +44,26 @@ app = FastAPI(
     version="0.2.0",
 )
 
+# Mobile apps don't need CORS. Browsers do: by default only localhost origins
+# (the bundled UI, `flutter run -d chrome`). Set MYANALYST_CORS_ORIGINS to a
+# comma-separated list for a deployed web client.
+_cors = [o.strip() for o in os.environ.get("MYANALYST_CORS_ORIGINS", "").split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors,
+    allow_origin_regex=None if _cors else r"https?://(localhost|127\.0\.0\.1)(:\d+)?",
     allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "DELETE"],
+    allow_headers=["Authorization", "Content-Type"],
 )
+
+app.include_router(auth.router)
 
 @app.on_event("startup")
 def on_startup() -> None:
+    auth.check_configuration()
     settings.ensure_dirs()
-    memory.init_db()
+    memory.init_db()  # also creates the auth tables (auth.py registers them on memory.Base)
     if not settings.DEEPSEEK_API_KEY:
         logger.warning("DEEPSEEK_API_KEY is not set; LLM-backed nodes will fail at call time.")
 
@@ -70,10 +84,12 @@ def _safe_filename(name: str) -> str:
     return re.sub(r"[^\w.\- ]", "_", Path(name).name).strip() or "upload"
 
 
-def _get_workspace_or_404(db, workspace_id: str) -> memory.Workspace:
+def _get_workspace_or_404(db, workspace_id: str, user: User) -> memory.Workspace:
+    """The workspace, if it belongs to this user. Anything else is a 404 (not
+    403), so other users' workspace ids can't be confirmed by probing."""
     ws = db.query(memory.Workspace).filter_by(workspace_id=workspace_id).first()
-    if not ws:
-        raise HTTPException(status_code=404, detail=f"Workspace '{workspace_id}' not found.")
+    if not ws or ws.owner_id != user.id:
+        raise HTTPException(status_code=404, detail="Workspace not found.")
     return ws
 
 
@@ -97,13 +113,22 @@ def _combined_executive_summary(files: list[memory.WorkspaceFile]) -> str:
     return "\n\n".join(f"{name}\n{summary}" for name, summary in summaries)
 
 
-def _workspace_response(db, workspace_id: str, errors: list[str] | None = None) -> schemas.WorkspaceResponse:
+def _workspace_response(db, workspace_id: str, user: User, errors: list[str] | None = None) -> schemas.WorkspaceResponse:
     """Builds the full workspace state from PostgreSQL, so the UI always renders
     every file in the workspace rather than just the latest upload batch."""
-    ws = _get_workspace_or_404(db, workspace_id)
+    ws = _get_workspace_or_404(db, workspace_id, user)
     files, digests, dictionary, cleaning_log, charts = [], [], [], [], []
+    cashflow, cashflow_file, privacy = None, None, {"names_protected": 0, "found_in_data": {}}
     for wf in _workspace_files(db, workspace_id):
         meta = json.loads(wf.parsed_metadata)
+        cf = meta.get("cashflow")
+        # Show the most useful cash flow: a full in/out ledger beats sales-only.
+        if cf and cf.get("detected") and (cashflow is None or (cashflow.get("mode") == "inflow_only" and cf.get("mode") == "in_and_out")):
+            cashflow, cashflow_file = cf, wf.filename
+        p = meta.get("privacy") or {}
+        privacy["names_protected"] += p.get("names_protected", 0)
+        for kind, n in (p.get("found_in_data") or {}).items():
+            privacy["found_in_data"][kind] = privacy["found_in_data"].get(kind, 0) + n
         files.append(schemas.FileIngestionMetadata(filename=wf.filename, file_type=wf.file_type, details=meta.get("details", {})))
         if wf.file_type == "document":
             digests.append(schemas.DocumentDigest(filename=wf.filename, **meta.get("digest", {})))
@@ -119,6 +144,9 @@ def _workspace_response(db, workspace_id: str, errors: list[str] | None = None) 
         charts=charts,
         executive_summary=ws.executive_summary or "",
         errors=errors or [],
+        cashflow=cashflow,
+        cashflow_file=cashflow_file,
+        privacy=privacy,
     )
 
 
@@ -166,7 +194,20 @@ def _ingest_tabular(raw_bytes: bytes, filename: str, workspace_dir: Path) -> tup
     remediated_df, r_log = remediate_data(clean_df, flagged_ids)
     full_log = i_log + r_log
 
-    data_dictionary = _normalize_dictionary(llm.generate_data_dictionary(metadata), metadata)
+    # Cash flow: deterministic pandas arithmetic, never the LLM (cashflow.py).
+    try:
+        cashflow = analyse_cashflow(remediated_df, flagged_ids)
+    except Exception:
+        logger.exception("Cash-flow analysis failed for %s", filename)
+        cashflow = {"detected": False, "reason": "error"}
+
+    # Privacy: names become [P#] placeholders and contact/ID numbers are
+    # removed from everything sent to the LLM; placeholders are swapped back
+    # in what the user sees (privacy.py).
+    privacy = PrivacyFilter(remediated_df)
+    masked_metadata = privacy.mask_json(metadata)
+    masked_dictionary = _normalize_dictionary(llm.generate_data_dictionary(masked_metadata), masked_metadata)
+    data_dictionary = privacy.unmask_obj(masked_dictionary)
 
     # Always persist as CSV (XLSX included) so the sandbox reads one format.
     clean_file_path = workspace_dir / f"clean_{Path(filename).stem}.csv"
@@ -174,10 +215,12 @@ def _ingest_tabular(raw_bytes: bytes, filename: str, workspace_dir: Path) -> tup
 
     eda_result = graph.run_eda_workflow(
         df=remediated_df,
-        metadata=metadata,
+        metadata=masked_metadata,
         cleaning_log=full_log,
         flagged_ids=flagged_ids,
-        data_dictionary=data_dictionary,
+        data_dictionary=masked_dictionary,
+        extra_insights=insights_for_summary(cashflow),
+        privacy=privacy,
     )
 
     return str(clean_file_path), {
@@ -187,6 +230,8 @@ def _ingest_tabular(raw_bytes: bytes, filename: str, workspace_dir: Path) -> tup
         "charts": eda_result.get("charts", []),
         "executive_summary": eda_result.get("executive_summary", ""),
         "flagged_ids": sorted(flagged_ids),
+        "cashflow": cashflow,
+        "privacy": privacy.report(),
     }
 
 ### --------------------------------------------------------------------------
@@ -198,6 +243,7 @@ def _ingest_tabular(raw_bytes: bytes, filename: str, workspace_dir: Path) -> tup
 def upload_workspace_files(
     workspace_id: str,
     files: list[UploadFile] = File(...),
+    user: User = Depends(current_user),
 ) -> schemas.WorkspaceResponse:
     uploads = [(f, _safe_filename(f.filename)) for f in files if f.filename]
     if not uploads:
@@ -220,10 +266,13 @@ def upload_workspace_files(
 
     with memory.SessionLocal() as db:
         ws = db.query(memory.Workspace).filter_by(workspace_id=workspace_id).first()
+        if ws and ws.owner_id != user.id:
+            raise HTTPException(status_code=404, detail="Workspace not found.")
         if not ws:
             if not is_new:
-                raise HTTPException(status_code=404, detail=f"Workspace '{workspace_id}' not found.")
-            ws = memory.Workspace(workspace_id=workspace_id, name="Analysis Workspace")
+                raise HTTPException(status_code=404, detail="Workspace not found.")
+            first_name = uploads[0][1] if uploads else "Analysis Workspace"
+            ws = memory.Workspace(workspace_id=workspace_id, name=first_name, owner_id=user.id)
             db.add(ws)
             db.commit()
 
@@ -286,21 +335,78 @@ def upload_workspace_files(
 
         ws.executive_summary = _combined_executive_summary(all_files)
         db.commit()
-        return _workspace_response(db, workspace_id, errors)
+        return _workspace_response(db, workspace_id, user, errors)
+
+
+@app.get("/workspaces", response_model=list[schemas.WorkspaceSummary])
+def list_workspaces(user: User = Depends(current_user)) -> list[schemas.WorkspaceSummary]:
+    """The signed-in user's workspaces, newest first."""
+    with memory.SessionLocal() as db:
+        rows = (db.query(memory.Workspace).filter_by(owner_id=user.id)
+                .order_by(memory.Workspace.created_at.desc()).all())
+        return [
+            schemas.WorkspaceSummary(
+                workspace_id=ws.workspace_id,
+                name=ws.name,
+                created_at=ws.created_at,
+                files=[f.filename for f in _workspace_files(db, ws.workspace_id)],
+            )
+            for ws in rows
+        ]
 
 
 @app.get("/workspaces/{workspace_id}", response_model=schemas.WorkspaceResponse)
-def get_workspace(workspace_id: str) -> schemas.WorkspaceResponse:
+def get_workspace(workspace_id: str, user: User = Depends(current_user)) -> schemas.WorkspaceResponse:
     with memory.SessionLocal() as db:
-        return _workspace_response(db, workspace_id)
+        return _workspace_response(db, workspace_id, user)
+
+
+@app.delete("/workspaces/{workspace_id}", status_code=204)
+def delete_workspace(workspace_id: str, user: User = Depends(current_user)) -> None:
+    """Deletes the workspace, its files on disk, document chunks, rules and chat."""
+    with memory.SessionLocal() as db:
+        ws = _get_workspace_or_404(db, workspace_id, user)
+        for model in (memory.ChatMessage, memory.BusinessRule, memory.DocumentChunk, memory.WorkspaceFile):
+            db.query(model).filter_by(workspace_id=workspace_id).delete()
+        db.delete(ws)
+        db.commit()
+    shutil.rmtree(settings.UPLOAD_DIR / workspace_id, ignore_errors=True)
+
+@app.get("/workspaces/{workspace_id}/cashflow")
+def get_cashflow(
+    workspace_id: str,
+    filename: str | None = None,
+    cash_on_hand: float | None = None,
+    user: User = Depends(current_user),
+) -> dict:
+    """Recomputes the cash-flow snapshot for one tabular file, optionally with
+    the owner's real cash balance (runway and the gap projection depend on it)."""
+    if cash_on_hand is not None and not (-1e12 < cash_on_hand < 1e12):
+        raise HTTPException(status_code=400, detail="cash_on_hand is out of range.")
+    with memory.SessionLocal() as db:
+        _get_workspace_or_404(db, workspace_id, user)
+        tabular = [f for f in _workspace_files(db, workspace_id) if f.file_type == "tabular"]
+        target = next((f for f in tabular if f.filename == filename), None) if filename else next(
+            (f for f in tabular if (json.loads(f.parsed_metadata).get("cashflow") or {}).get("detected")), None)
+        if target is None:
+            raise HTTPException(status_code=404, detail="No cash-flow data in this workspace.")
+        meta = json.loads(target.parsed_metadata)
+        # The stored CSV is already clean; re-running ingestion restores the
+        # dtypes (dates) a CSV round-trip loses.
+        df, _, _ = apply_ingestion_heuristics(pd.read_csv(target.file_path))
+        cf = analyse_cashflow(df, set(meta.get("flagged_ids", [])), cash_on_hand=cash_on_hand)
+        meta["cashflow"] = cf
+        target.parsed_metadata = json.dumps(meta, default=str)
+        db.commit()
+        return cf
 
 ### --------------------------------------------------------------------------
 ### Predictive Modeling (AutoML)
 ### --------------------------------------------------------------------------
 @app.post("/workspaces/{workspace_id}/predict", response_model=schemas.PredictiveResponse)
-def run_predictive_analysis(workspace_id: str, payload: schemas.PredictiveRequest):
+def run_predictive_analysis(workspace_id: str, payload: schemas.PredictiveRequest, user: User = Depends(current_user)):
     with memory.SessionLocal() as db:
-        _get_workspace_or_404(db, workspace_id)
+        _get_workspace_or_404(db, workspace_id, user)
         tabular_files = [f for f in _workspace_files(db, workspace_id) if f.file_type == "tabular"]
         if not tabular_files:
             raise HTTPException(status_code=400, detail="No tabular data found in this workspace to model.")
@@ -346,9 +452,9 @@ def run_predictive_analysis(workspace_id: str, payload: schemas.PredictiveReques
 ### Business Rules & Chat History
 ### --------------------------------------------------------------------------
 @app.post("/workspaces/{workspace_id}/business-rules", response_model=schemas.BusinessRule)
-def create_business_rule(workspace_id: str, payload: schemas.BusinessRuleCreate):
+def create_business_rule(workspace_id: str, payload: schemas.BusinessRuleCreate, user: User = Depends(current_user)):
     with memory.SessionLocal() as db:
-        _get_workspace_or_404(db, workspace_id)
+        _get_workspace_or_404(db, workspace_id, user)
         rule = memory.BusinessRule(workspace_id=workspace_id, rule_text=payload.rule_text)
         db.add(rule)
         db.commit()
@@ -361,13 +467,15 @@ def create_business_rule(workspace_id: str, payload: schemas.BusinessRuleCreate)
         )
 
 @app.get("/workspaces/{workspace_id}/business-rules", response_model=list[schemas.BusinessRule])
-def list_business_rules(workspace_id: str):
+def list_business_rules(workspace_id: str, user: User = Depends(current_user)):
     with memory.SessionLocal() as db:
+        _get_workspace_or_404(db, workspace_id, user)
         return db.query(memory.BusinessRule).filter_by(workspace_id=workspace_id).order_by(memory.BusinessRule.id).all()
 
 @app.get("/workspaces/{workspace_id}/chat-history", response_model=list[schemas.ChatMessage])
-def get_chat_history(workspace_id: str, session_id: str):
+def get_chat_history(workspace_id: str, session_id: str, user: User = Depends(current_user)):
     with memory.SessionLocal() as db:
+        _get_workspace_or_404(db, workspace_id, user)
         return (
             db.query(memory.ChatMessage)
             .filter_by(workspace_id=workspace_id, session_id=session_id)
@@ -379,9 +487,9 @@ def get_chat_history(workspace_id: str, session_id: str):
 ### The Q&A Loop
 ### --------------------------------------------------------------------------
 @app.post("/workspaces/{workspace_id}/qa", response_model=schemas.QAResponse)
-def ask_question(workspace_id: str, payload: schemas.QARequest):
+def ask_question(workspace_id: str, payload: schemas.QARequest, user: User = Depends(current_user)):
     with memory.SessionLocal() as db:
-        _get_workspace_or_404(db, workspace_id)
+        _get_workspace_or_404(db, workspace_id, user)
     session_id = payload.session_id or str(uuid.uuid4())
 
     # Executes the routed (quant / doc / hybrid) LangGraph workflow
@@ -402,14 +510,14 @@ def ask_question(workspace_id: str, payload: schemas.QARequest):
 ### Chart Q&A: questions about one expanded chart, answered from its plotted data
 ### --------------------------------------------------------------------------
 @app.post("/workspaces/{workspace_id}/chart-qa", response_model=schemas.ChartQAResponse)
-def ask_about_chart(workspace_id: str, payload: schemas.ChartQARequest):
+def ask_about_chart(workspace_id: str, payload: schemas.ChartQARequest, user: User = Depends(current_user)):
     try:
         figure = json.loads(payload.plotly_json)
     except json.JSONDecodeError:
         raise HTTPException(status_code=400, detail="plotly_json is not a valid serialized figure.")
 
     with memory.SessionLocal() as db:
-        _get_workspace_or_404(db, workspace_id)
+        _get_workspace_or_404(db, workspace_id, user)
         tabular = [f for f in _workspace_files(db, workspace_id) if f.file_type == "tabular"]
         # Chat-generated charts can span datasets, so only narrow when the source is known.
         scoped = [f for f in tabular if f.filename == payload.source_file] or tabular

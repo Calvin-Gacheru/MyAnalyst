@@ -15,6 +15,10 @@ Autonomous multi-modal analysis workspace. Upload tabular data (CSV/XLSX) and do
 - `modeling.py` — AutoML predictive modeling
 - `forecasting.py` — automatic time-series forecasting
 - `main.py` — FastAPI routes, wiring, and the static-file mount that serves the frontend
+- `auth.py` — accounts and sign-in: 15-minute JWT access tokens, rotating 30-day refresh tokens, per-device logout (see "Accounts and security" below)
+- `cashflow.py` — deterministic cash-flow snapshot, 90-day balance projection, cash-gap warning and financing fit for transaction-style files
+- `privacy.py` — masks names, phone numbers, emails, PRC IDs and card numbers in everything sent to the LLM
+- `myanalyst_app/` — the Flutter mobile app (see its README)
 
 ### The Q&A graph
 
@@ -63,7 +67,15 @@ DEEPSEEK_API_KEY=<your DeepSeek API key>
 MYANALYST_LLM_MODEL=deepseek-chat
 # Optional — this is the default and matches docker-compose.yml:
 # DATABASE_URL=postgresql://postgres:postgres@localhost:5432/myanalyst
+
+# Required: signs the access-token JWTs. Generate with:
+#   python -c "import secrets; print(secrets.token_urlsafe(48))"
+MYANALYST_JWT_SECRET=<random string, at least 32 characters>
 ```
+
+The server refuses to start without `MYANALYST_JWT_SECRET`. For local work on the web
+frontend (which has no sign-in screen yet) add `MYANALYST_AUTH_DISABLED=1`: every request
+then acts as one local user. **Development only** — never set it on a shared server.
 
 A plain `postgresql://` URL is fine; `config.py` switches it to the installed psycopg (v3) driver.
 
@@ -120,3 +132,34 @@ docker images myanalyst-sandbox       # confirm the sandbox image exists
 - **`Docker image 'myanalyst-sandbox:latest' not found`** in a Q&A answer — run step 4.
 - **`Unable to connect to Docker daemon`** — start Docker, and make sure your user is in the `docker` group.
 - **`DEEPSEEK_API_KEY is not set`** — check the `.env` file from step 1.
+- **`MYANALYST_JWT_SECRET must be set`** — add it to `.env` (step 1).
+- **`password authentication failed for user "postgres"`** — another PostgreSQL (e.g. a Windows install) already owns port 5432. Map the container to another port (e.g. `5433:5432`) and use that port in `DATABASE_URL`.
+- **Startup hangs or fails downloading `all-MiniLM-L6-v2`** — the embedding model comes from huggingface.co on first start, which is blocked in mainland China. Set `HF_ENDPOINT=https://hf-mirror.com` or pre-download the model.
+
+## Accounts and security
+
+Every `/workspaces` route requires `Authorization: Bearer <access token>` and only ever
+touches the caller's own workspaces; anything else returns 404, so workspace ids can't
+be probed.
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /auth/register`, `POST /auth/login` | `{username, password}` → `{access_token, expires_in, refresh_token, username}` |
+| `POST /auth/refresh` | `{refresh_token}` → a new pair. Each refresh token works once; re-using a spent one revokes that sign-in (theft detection). |
+| `POST /auth/logout` | `{refresh_token}` → signs out this device only |
+| `GET /auth/me` | current user |
+| `GET /workspaces` | the caller's workspaces |
+| `DELETE /workspaces/{id}` | deletes a workspace, its files, chunks, rules and chat |
+| `GET /workspaces/{id}/cashflow?cash_on_hand=` | recomputes runway / gap with the owner's real cash balance |
+
+Passwords are scrypt-hashed; refresh tokens are stored only as SHA-256 hashes; five failed
+logins lock the username for 15 minutes. Access tokens last 15 minutes
+(`MYANALYST_ACCESS_TOKEN_MINUTES`), refresh tokens 30 days (`MYANALYST_REFRESH_TOKEN_DAYS`).
+
+Uploads also run `cashflow.py` (stored with the file and returned as `cashflow` in the
+workspace response) and `privacy.py` (the LLM sees `[P1]`-style placeholders instead of
+names; numbers like phones and IDs are removed; the user sees real values).
+
+Data integrity: outliers are **flagged, never rewritten**, and money stays float64.
+Capping rewrote real transactions (it halved `store_sales.csv` revenue) and float32
+lost cents on large amounts.

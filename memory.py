@@ -15,6 +15,8 @@ class Workspace(Base):
     __tablename__ = "workspaces"
     workspace_id = Column(String, primary_key=True)
     name = Column(String, nullable=False, default="Untitled Workspace")
+    # Account that created the workspace (auth.Account.id). Every route checks it.
+    owner_id = Column(Integer, index=True)
     executive_summary = Column(Text, default="")
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
@@ -62,3 +64,9 @@ def init_db() -> None:
         conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector;"))
         conn.commit()
     Base.metadata.create_all(bind=engine)
+    # create_all doesn't add columns to existing tables: migrate databases
+    # created before workspaces had owners.
+    with engine.connect() as conn:
+        conn.execute(text("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS owner_id INTEGER"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_workspaces_owner_id ON workspaces (owner_id)"))
+        conn.commit()

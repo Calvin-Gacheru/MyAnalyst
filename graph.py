@@ -56,6 +56,9 @@ class EDAState(TypedDict, total=False):
     numeric_columns: list[str]  # most informative first (see _rank_numeric)
     categorical_columns: list[str]
     executive_summary: str
+    # Optional (cash-flow / privacy integration). Absent = previous behaviour.
+    extra_insights: list[str]  # deterministic cash-flow facts (cashflow.insights_for_summary)
+    privacy: Any  # privacy.PrivacyFilter: masks text bound for the LLM
 
 
 # The charts the builder knows how to draw, and which column role each axis needs.
@@ -376,13 +379,24 @@ def _eda_summarizer_node(state: EDAState) -> dict[str, Any]:
                 f"Exhibits {trend_dir} historical trend (moving from {start_val:.2f} to {end_val:.2f})."
             )
 
+    # Cash-flow facts lead the summary when the file has them.
+    data_insights = list(state.get("extra_insights", [])) + data_insights
+
+    privacy = state.get("privacy")
+    if privacy is not None:
+        cleaning_log = privacy.mask_json(state.get("cleaning_log", []))
+        chart_descriptions = [privacy.mask(c) for c in chart_descriptions]
+        data_insights = [privacy.mask(i) for i in data_insights]
+    else:
+        cleaning_log = state.get("cleaning_log", [])
+
     summary = llm.generate_executive_summary(
-        metadata=state["metadata"],
-        cleaning_log=state.get("cleaning_log", []),
+        metadata=state["metadata"],  # masked by the caller when privacy is on
+        cleaning_log=cleaning_log,
         chart_descriptions=chart_descriptions,
         data_insights=data_insights,  # Pass the newly extracted insights
     )
-    return {"executive_summary": summary}
+    return {"executive_summary": privacy.unmask(summary) if privacy is not None else summary}
 
 
 def build_eda_graph():
@@ -412,6 +426,8 @@ def run_eda_workflow(
     cleaning_log: list[dict[str, Any]],
     flagged_ids: set[str],
     data_dictionary: list[dict[str, Any]] | None = None,
+    extra_insights: list[str] | None = None,
+    privacy: Any = None,
 ) -> EDAState:
     initial_state: EDAState = {
         "df": df,
@@ -419,6 +435,8 @@ def run_eda_workflow(
         "cleaning_log": cleaning_log,
         "flagged_ids": flagged_ids,
         "data_dictionary": data_dictionary or [],
+        "extra_insights": extra_insights or [],
+        "privacy": privacy,
     }
     return _eda_graph.invoke(initial_state)
 
