@@ -37,7 +37,9 @@ class Settings:
     # account has access to (e.g., "deepseek-flash" or "deepseek-v4-pro").
     DEEPSEEK_API_KEY: str = os.environ.get("DEEPSEEK_API_KEY", "")
     LLM_MODEL: str = os.environ.get("MYANALYST_LLM_MODEL", "deepseek-flash")
-    LLM_MAX_TOKENS: int = int(os.environ.get("MYANALYST_LLM_MAX_TOKENS", "2048"))
+    # Floor for every reply. DeepSeek reasons before answering and that counts
+    # against the cap; 2048 produced empty scripts and cut-off summaries.
+    LLM_MAX_TOKENS: int = int(os.environ.get("MYANALYST_LLM_MAX_TOKENS", "8192"))
 
     # --- Auth (see auth.py) ---
     # HS256 signing key for access-token JWTs. Required unless auth is

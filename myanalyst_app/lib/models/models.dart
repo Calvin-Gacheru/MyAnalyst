@@ -18,6 +18,18 @@ Map<String, Object?> _map(Object? v) =>
 DateTime _date(Object? v) =>
     DateTime.tryParse(_str(v))?.toLocal() ?? DateTime.now();
 
+/// AI text is shown as plain text (never interpreted as markup), so strip the
+/// Markdown the model likes to add: **bold**, __bold__, # headings, `code`,
+/// and "- " / "* " bullets become "• ".
+String plainText(Object? v) {
+  var s = _str(v);
+  s = s.replaceAllMapped(RegExp(r'\*\*(.+?)\*\*|__(.+?)__', dotAll: true), (m) => m[1] ?? m[2] ?? '');
+  s = s.replaceAll(RegExp(r'^#{1,6}\s*', multiLine: true), '');
+  s = s.replaceAllMapped(RegExp(r'`([^`\n]+)`'), (m) => m[1]!);
+  s = s.replaceAll(RegExp(r'^\s*[-*]\s+', multiLine: true), '• ');
+  return s.trim();
+}
+
 class DataDictionaryEntry {
   const DataDictionaryEntry({
     required this.column,
@@ -286,7 +298,7 @@ class Dataset {
       cleaningLog:
           _maps(j['cleaning_log']).map(CleaningLogEntry.fromJson).toList(),
       charts: _maps(j['charts']).map(ChartData.fromBackendChart).toList(),
-      executiveSummary: _str(j['executive_summary']),
+      executiveSummary: plainText(j['executive_summary']),
       uploadedAt: uploadedAt ?? created ?? DateTime.now(),
       cashFlow: CashFlow.fromJson(j['cashflow']),
       privacy: PrivacyReport.fromJson(j['privacy']),
@@ -320,7 +332,7 @@ Dataset datasetFromWorkspaceJson(Map<String, Object?> j,
     cleaningLog:
         _maps(j['cleaning_log']).map(CleaningLogEntry.fromJson).toList(),
     charts: _maps(j['charts']).map(ChartData.fromBackendChart).toList(),
-    executiveSummary: _str(j['executive_summary']),
+    executiveSummary: plainText(j['executive_summary']),
     uploadedAt: openedAt ?? DateTime.now(),
     cashFlow: CashFlow.fromJson(j['cashflow']),
     privacy: PrivacyReport.fromJson(j['privacy']),
@@ -451,7 +463,7 @@ class Answer {
     final succeeded = out.isNotEmpty;
     return Answer(
       sessionId: _str(j['session_id']),
-      text: _str(j['answer']),
+      text: plainText(j['answer']),
       generatedCode: _str(j['generated_code']),
       attempts: _int(j['attempts']),
       chart: chart is UnsupportedChart ? null : chart,

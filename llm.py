@@ -45,19 +45,49 @@ def _call(
     user: str,
     *,
     max_tokens: int | None = None,
+    thinking: bool = False,
 ) -> str:
-    """Single non-streaming completion call. Returns the concatenated text blocks."""
+    """Single non-streaming completion call. Returns the concatenated text blocks.
+
+    `thinking` turns on DeepSeek's reasoning. It helps planning and code
+    generation; for prose (summaries, dictionaries, answers) it only adds
+    latency and can use up the whole token budget, so it is off by default.
+    """
     client = _get_client()
+    if _PLACEHOLDER.search(user):
+        system += _PLACEHOLDER_NOTE
     response = client.chat.completions.create(
         model=settings.LLM_MODEL,
-        max_tokens=max_tokens or settings.LLM_MAX_TOKENS,
+        # DeepSeek's current models reason before answering, and the reasoning
+        # counts against max_tokens. A small cap (e.g. 2048) can be used up by
+        # thinking alone, returning an empty script or a cut-off summary, so
+        # never go below the configured floor.
+        # With thinking on, reasoning alone can exceed 8k tokens on a real
+        # dataset prompt (seen in testing), so those calls get double.
+        max_tokens=max(max_tokens or 0, settings.LLM_MAX_TOKENS * (2 if thinking else 1)),
         messages=[
             {"role": "system", "content": system},
             {"role": "user", "content": user},
-        ]
+        ],
+        extra_body=None if thinking else {"thinking": {"type": "disabled"}},
     )
 
-    return response.choices[0].message.content
+    choice = response.choices[0]
+    if choice.finish_reason == "length":
+        logger.warning("LLM reply hit the token limit (%s tokens used); output may be truncated.",
+                       getattr(response.usage, "completion_tokens", "?"))
+    # content can be None (e.g. a filtered response); callers .strip() it.
+    return choice.message.content or ""
+
+
+# privacy.py replaces names with [P1]-style placeholders before any LLM call.
+_PLACEHOLDER = re.compile(r"\[P\d+\]")
+_PLACEHOLDER_NOTE = (
+    "\n\nSome names in the input were replaced with placeholders like [P1] for privacy. "
+    "Treat each placeholder as the real name of that person or business and write it exactly as "
+    "given (it is swapped back before the user reads your answer). Do not call them codes or "
+    "anonymised, and never guess the hidden names."
+)
 
 def _call_json(system: str, user: str, *, max_tokens: int | None = None) -> Any:
     """
@@ -222,7 +252,7 @@ def generate_plan(
         f"User question: {question}\n\n"
         "Produce the step-by-step plan."
     )
-    return _call(system, user)
+    return _call(system, user, thinking=True)
 
 
 def generate_code(
@@ -260,7 +290,7 @@ def generate_code(
         f"Plan:\n{plan}"
         f"{correction_note}"
     )
-    code = _call(system, user, max_tokens=2048)
+    code = _call(system, user, max_tokens=2048, thinking=True)
     return code.strip().removeprefix("```python").removeprefix("```").removesuffix("```").strip()
 
 

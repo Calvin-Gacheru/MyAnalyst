@@ -41,6 +41,12 @@ void main() {
     expect(p.found['phone'], 3);
   });
 
+  test('model Markdown is stripped to plain text', () {
+    expect(plainText('**Cash is falling.** See `net`.\n## Next\n- cut costs\n* sell more'),
+        'Cash is falling. See net.\nNext\n• cut costs\n• sell more');
+    expect(plainText(null), '');
+  });
+
   test('workspace list row', () {
     final row = DatasetSummary.fromWorkspaceJson({
       'workspace_id': json['workspace_id'],
